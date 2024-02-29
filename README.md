@@ -1,4 +1,4 @@
-# Easy Updater and Installer for SAP Cloud Connector and SAP JVM
+# Easy Installer and Updater for SAP Cloud Connector and SAP JVM
 
 This suite of Bash scripts automates the update or installation process of the SAP Cloud Connector and the SAP Java Virtual Machine (SAPJVM) on Linux systems with `x86_64` architecture. It facilitates the management of the lifecycle for both the SAP Cloud Connector and SAP JVM by automating version checks, downloading the latest versions available online, and ensuring the integrity of downloaded packages through SHA1 hash verification.
 
