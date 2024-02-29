@@ -30,13 +30,15 @@ yum -y install wget curl unzip
 
 ## Run the update:
 
-To update the **SAP Cloud Connector**, execute the following command:
+To **update** the existing **SAP Cloud Connector**, execute the following command:
 
 ```shell=
 bash -c "$(wget -qLO - https://github.com/robertfels/updateCloudConnector/raw/main/update.sh)"
 ```
 
-To install the **SAP Cloud Connector**, execute the following command:
+## Run the install:
+
+To **install** a new **SAP Cloud Connector**, execute the following command:
 
 ```shell=
 bash -c "$(wget -qLO - https://github.com/robertfels/updateCloudConnector/raw/main/install.sh)"
