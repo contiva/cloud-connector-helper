@@ -2,8 +2,7 @@
 
 echo "Updating system and installing required packages..."
 sudo yum update -y
-sudo yum -y install curl wget unzip
-
+sudo yum -y install curl unzip
 
 # URL and basic information
 URL="https://tools.hana.ondemand.com/#cloud"
@@ -42,11 +41,11 @@ update_common() {
         return 0
     fi
     
-    echo "A new version of $PRODUCT_NAME is available: $NEW_VERSION"
-    read -p "Do you want to proceed with the update? (y/N) " PROCEED_UPDATE
+    echo "The following version of the $PRODUCT_NAME would be installed: $NEW_VERSION"
+    read -p "Do you want to proceed with the installation? (y/N) " PROCEED_UPDATE
     
     if [ "${PROCEED_UPDATE,,}" != "y" ]; then
-        echo "Update aborted by the user."
+        echo "Installation aborted by the user."
         return 1
     fi
     
@@ -93,15 +92,15 @@ download_and_update() {
     
     local RPM_PACKAGE=$(ls *.rpm)
     
-    echo "Updating $PRODUCT_NAME..."
+    echo "Install $PRODUCT_NAME..."
     if ! sudo rpm -U "$RPM_PACKAGE"; then
-        echo "Update failed."
+        echo "Installation failed."
         cleanup
         return 1
     fi
     
     cleanup
-    echo "$PRODUCT_NAME update completed."
+    echo "$PRODUCT_NAME installation completed."
 }
 
 # Cleanup function
@@ -121,7 +120,7 @@ verify_hash() {
     local SHA1SUM_ACTUAL=$(sha1sum "$FILENAME" | awk '{print $1}')
     
     if [ "$SHA1SUM_EXPECTED" != "$SHA1SUM_ACTUAL" ]; then
-        echo "Hash verification failed. Update aborted."
+        echo "Hash verification failed. Install aborted."
         cleanup
         exit 1
     fi
@@ -144,19 +143,24 @@ echo "Please read the EULA at: $EULA_URL"
 read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
 
 if [ "${ACCEPT_EULA,,}" != "y" ]; then
-    echo "You did not accept the EULA. Update aborted."
+    echo "You did not accept the EULA. Install aborted."
     exit 1
 fi
 
 # Ask user for each product update
-read -p "Do you want to update SAP JVM? (y/N) " UPDATE_JVM
+read -p "Do you want to install SAP JVM? (y/N) " UPDATE_JVM
 if [ "${UPDATE_JVM,,}" = "y" ]; then
     update_jvm
 fi
 
-read -p "Do you want to update SAP Cloud Connector? (y/N) " UPDATE_SCC
+read -p "Do you want to install SAP Cloud Connector? (y/N) " UPDATE_SCC
 if [ "${UPDATE_SCC,,}" = "y" ]; then
     update_scc
 fi
 
-echo "All updates completed."
+echo "All installations are completed."
+echo ""
+IP_ADDRESS=$(hostname -I | awk '{print $1}') # Gets the first IP address
+echo "Login via https://${IP_ADDRESS}:8443"
+echo "Username: Administrator"
+echo "Password: manage"
