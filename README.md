@@ -4,7 +4,7 @@ This Bash script automates the update process of the SAP Cloud Connector on Linu
 
 ## Supported Distributions
 
-The script is compatible with Linux distributions that use the RPM Package Manager and `systemd` as their init system. These distributions include:
+The script is compatible with Linux distributions on `x86_64` that use the RPM Package Manager and `systemd` as their init system. These distributions include:
 
 - Red Hat Enterprise Linux (RHEL)
 - CentOS
