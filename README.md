@@ -61,3 +61,5 @@ bash -c "$(wget -qLO - https://github.com/robertfels/cloud-connector-helper/raw/
 - It is highly recommended to create a backup of your system configuration and any existing SAP Cloud Connector and JVM settings before running these scripts.
 
 These scripts aim to streamline the installation and update processes for the SAP Cloud Connector and Java Virtual Machine, reducing manual effort and ensuring consistency across installations.
+
+"SAP" is a trademark or registered trademark of SAP SE or its affiliates in Germany and other countries.
