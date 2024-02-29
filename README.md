@@ -1,4 +1,4 @@
-# Easy Update for SAP Cloud Connector
+# Easy Updater for SAP Cloud Connector
 
 This Bash script automates the update process of the SAP Cloud Connector on Linux systems. It checks the currently installed version of the SAP Cloud Connector, identifies the latest version available online, and performs an update if necessary. Additionally, it manages the download of the necessary files, including the verification of SHA1 hashes to ensure the integrity of the downloaded packages.
 
