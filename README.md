@@ -36,7 +36,7 @@ yum -y install wget curl unzip
 bash -c "$(wget -qLO - https://github.com/robertfels/updateCloudConnector/raw/main/update.sh)"
 ```
 
-2. ++(Optional)++ To update the SAP JVM, execute the following command:
+2. (Optional) To update the SAP JVM, execute the following command:
 
 ```shell=
 bash -c "$(wget -qLO - https://github.com/robertfels/updateCloudConnector/raw/main/updateJVM.sh)"
