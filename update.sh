@@ -16,7 +16,7 @@ NEW_VERSION=$(curl -s "$URL" | grep -oP "sapcc-\K[0-9.]+(?=-linux-x64.zip)" | so
 # Check if a new version is available
 if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
     echo "The latest version is already installed: $CURRENT_VERSION"
-    exit 0
+    #exit 0
 fi
 
 #echo "New version available: $NEW_VERSION"
