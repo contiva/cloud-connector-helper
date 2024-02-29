@@ -30,21 +30,21 @@ if [ -z "$EULA_COOKIE_VALUE" ]; then
     exit 1
 fi
 
-EULA_URL="https://tools.hana.ondemand.com/$EULA_COOKIE_VALUE"
+EULA_URL="https://$EULA_COOKIE_VALUE"
 
 echo "Please read the EULA at: $EULA_URL"
 read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
 
-if [ "$ACCEPT_EULA" != "y" ]; then
+if [ "${ACCEPT_EULA,,}" != "y" ]; then
     echo "You did not accept the EULA. Update aborted."
     exit 1
 fi
 
 # Confirm update installation
 echo "An update from version $CURRENT_VERSION to $NEW_VERSION is available."
-read -p "Do you want to proceed with the update? (yes/no) " PROCEED_UPDATE
+read -p "Do you want to proceed with the update? (y/N) " PROCEED_UPDATE
 
-if [ "$PROCEED_UPDATE" != "yes" ]; then
+if [ "${PROCEED_UPDATE,,}" != "y" ]; then
     echo "Update aborted by the user."
     exit 1
 fi
@@ -106,13 +106,21 @@ if ! sudo rpm -U "$RPM_PACKAGE"; then
     exit 1
 fi
 
+# Confirm update installation
+read -p "Do you want to restart the Cloud Connector (recommend) (y/N) " PROCEED_RESTART
+
+if [ "${PROCEED_RESTART,,}" != "y" ]; then
+    echo "Update completed. Please restart the Cloud Connector yourself:"
+    echo "Command: sudo systemctl restart scc_daemon"
+    cleanup
+    exit 1
+fi
+
 # Restart the SAP Cloud Connector daemon
 echo "Restarting the SAP Cloud Connector daemon..."
 sudo systemctl restart scc_daemon
 
-echo "Update completed."
-
 # Cleanup: Delete downloaded and unpacked files
 cleanup
 
-echo "Temporary files deleted."
+echo "Update completed."
