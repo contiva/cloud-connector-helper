@@ -8,18 +8,18 @@ DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
 INSTALLED_PACKAGE=$(rpm -qa | grep "com.sap.scc-ui")
 CURRENT_VERSION=$(echo "$INSTALLED_PACKAGE" | grep -oP "[0-9]+\.[0-9]+\.[0-9]+")
 
-echo "Currently installed version: $CURRENT_VERSION"
+#echo "Currently installed version: $CURRENT_VERSION"
 
 # Dynamically determine the new version
 NEW_VERSION=$(curl -s "$URL" | grep -oP "sapcc-\K[0-9.]+(?=-linux-x64.zip)" | sort -V | tail -n1)
 
 # Check if a new version is available
 if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
-    echo "The latest version is already installed."
+    echo "The latest version is already installed: $CURRENT_VERSION"
     exit 0
 fi
 
-echo "New version available: $NEW_VERSION"
+#echo "New version available: $NEW_VERSION"
 
 # Extract EULA information
 EULA_COOKIE_NAME=$(curl -s "$URL" | grep -oP "eulaConst.devLicense.cookieName = '\K[^']+" )
@@ -30,7 +30,24 @@ if [ -z "$EULA_COOKIE_VALUE" ]; then
     exit 1
 fi
 
-echo "EULA cookie value: $EULA_COOKIE_VALUE"
+EULA_URL="https://tools.hana.ondemand.com/$EULA_COOKIE_VALUE"
+
+echo "Please read the EULA at: $EULA_URL"
+read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
+
+if [ "$ACCEPT_EULA" != "y" ]; then
+    echo "You did not accept the EULA. Update aborted."
+    exit 1
+fi
+
+# Confirm update installation
+echo "An update from version $CURRENT_VERSION to $NEW_VERSION is available."
+read -p "Do you want to proceed with the update? (yes/no) " PROCEED_UPDATE
+
+if [ "$PROCEED_UPDATE" != "yes" ]; then
+    echo "Update aborted by the user."
+    exit 1
+fi
 
 # Download URLs
 DOWNLOAD_URL="$DOWNLOAD_BASE_URL/sapcc-$NEW_VERSION-linux-x64.zip"
