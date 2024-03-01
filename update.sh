@@ -150,10 +150,14 @@ cleanup() {
 # Function to send email notification
 send_update_email() {
     if [ -n "$EMAIL" ]; then
-        echo -e "Update Summary:$UPDATE_RESULTS" | mail -s "Update Summary" $EMAIL
+        {
+            echo "To: $EMAIL"
+            echo "Subject: Update Summary"
+            echo
+            echo -e "Update Summary:$UPDATE_RESULTS"
+        } | sendmail -t
     fi
 }
-
 
 # Verify the SHA1 hash
 verify_hash() {
@@ -184,8 +188,8 @@ fi
 
 EULA_URL="https://$EULA_COOKIE_VALUE"
 
-echo "Please read the EULA at: $EULA_URL"
-read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
+# echo "Please read the EULA at: $EULA_URL"
+# read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
 
 if ask_or_default_yes "Do you accept the EULA?"; then
     echo "EULA accepted."
@@ -197,8 +201,8 @@ else
 fi
 
 if $UNATTENDED; then
-    update_jvm # Ensure this function uses append_update_results to record the outcome
-    update_scc # Ensure this function uses append_update_results to record the outcome
+    update_jvm
+    update_scc 
     send_update_email
 else
     # Ask user for each product update
