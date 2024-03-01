@@ -4,6 +4,33 @@
 URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
 
+# Initialize variables
+UNATTENDED=false
+EMAIL=""
+UPDATE_RESULTS=""
+
+# Check for unattended mode and optional email
+if [ "$1" == "--unattended" ]; then
+    UNATTENDED=true
+    if [ -n "$2" ]; then
+        EMAIL="$2"
+    fi
+fi
+
+# Function to ask user or assume yes in unattended mode
+ask_or_default_yes() {
+    local PROMPT=$1
+    if $UNATTENDED; then
+        echo "$PROMPT: Auto-accepting for unattended mode."
+        return 0
+    else
+        read -p "$PROMPT (y/N) " RESPONSE
+        if [ "${RESPONSE,,}" != "y" ]; then
+            return 1
+        fi
+    fi
+}
+
 # Function to update SAP Cloud Connector
 update_scc() {
     local INSTALLED_PACKAGE=$(rpm -qa | grep "com.sap.scc-ui")
@@ -34,19 +61,27 @@ update_common() {
     
     if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
         echo "The latest version of $PRODUCT_NAME is already installed: $CURRENT_VERSION"
+        append_update_results "$PRODUCT_NAME" "ALREADY UP-TO-DATE"
         return 0
     fi
     
     echo "A new version of $PRODUCT_NAME is available: $NEW_VERSION"
-    read -p "Do you want to proceed with the update? (y/N) " PROCEED_UPDATE
-    
-    if [ "${PROCEED_UPDATE,,}" != "y" ]; then
-        echo "Update aborted by the user."
-        return 1
+    if ! $UNATTENDED; then
+        read -p "Do you want to proceed with the update? (y/N) " PROCEED_UPDATE
+        
+        if [ "${PROCEED_UPDATE,,}" != "y" ]; then
+            echo "Update aborted by the user."
+            append_update_results "$PRODUCT_NAME" "ABORTED BY USER"
+            return 1
+        fi
     fi
     
     # Download and update process
-    download_and_update "$PRODUCT_NAME" "$PRODUCT_PREFIX" "$NEW_VERSION" "$FILE_TYPE"
+    if download_and_update "$PRODUCT_NAME" "$PRODUCT_PREFIX" "$NEW_VERSION" "$FILE_TYPE"; then
+        append_update_results "$PRODUCT_NAME" "SUCCESS"
+    else
+        append_update_results "$PRODUCT_NAME" "FAILED"
+    fi
 }
 
 # Download and update process
@@ -99,12 +134,26 @@ download_and_update() {
     echo "$PRODUCT_NAME update completed."
 }
 
+append_update_results() {
+    local PRODUCT_NAME=$1
+    local UPDATE_STATUS=$2
+    UPDATE_RESULTS="$UPDATE_RESULTS\n$PRODUCT_NAME update: $UPDATE_STATUS"
+}
+
 # Cleanup function
 cleanup() {
     echo "Cleaning up temporary files..."
     cd ..
     rm -rf update_temp
 }
+
+# Function to send email notification
+send_update_email() {
+    if [ -n "$EMAIL" ]; then
+        echo -e "Update Summary:$UPDATE_RESULTS" | mail -s "Update Summary" $EMAIL
+    fi
+}
+
 
 # Verify the SHA1 hash
 verify_hash() {
@@ -138,20 +187,30 @@ EULA_URL="https://$EULA_COOKIE_VALUE"
 echo "Please read the EULA at: $EULA_URL"
 read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
 
-if [ "${ACCEPT_EULA,,}" != "y" ]; then
-    echo "You did not accept the EULA. Update aborted."
-    exit 1
+if ask_or_default_yes "Do you accept the EULA?"; then
+    echo "EULA accepted."
+else
+    if ! $UNATTENDED; then
+        echo "You did not accept the EULA. Update aborted."
+        exit 1
+    fi
 fi
 
-# Ask user for each product update
-read -p "Do you want to update SAP JVM? (y/N) " UPDATE_JVM
-if [ "${UPDATE_JVM,,}" = "y" ]; then
-    update_jvm
-fi
+if $UNATTENDED; then
+    update_jvm # Ensure this function uses append_update_results to record the outcome
+    update_scc # Ensure this function uses append_update_results to record the outcome
+    send_update_email
+else
+    # Ask user for each product update
+    read -p "Do you want to update SAP JVM? (y/N) " UPDATE_JVM
+    if [ "${UPDATE_JVM,,}" = "y" ]; then
+        update_jvm
+    fi
 
-read -p "Do you want to update SAP Cloud Connector? (y/N) " UPDATE_SCC
-if [ "${UPDATE_SCC,,}" = "y" ]; then
-    update_scc
+    read -p "Do you want to update SAP Cloud Connector? (y/N) " UPDATE_SCC
+    if [ "${UPDATE_SCC,,}" = "y" ]; then
+        update_scc
+    fi
 fi
 
 echo "All updates completed."
