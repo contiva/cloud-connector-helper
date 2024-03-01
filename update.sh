@@ -191,7 +191,7 @@ EULA_URL="https://$EULA_COOKIE_VALUE"
 # echo "Please read the EULA at: $EULA_URL"
 # read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
 
-if ask_or_default_yes "Do you accept the EULA ($EULA_COOKIE_VALUE)?"; then
+if ask_or_default_yes "Do you accept the EULA (https://$EULA_COOKIE_VALUE)?"; then
     echo "EULA accepted."
 else
     if ! $UNATTENDED; then
