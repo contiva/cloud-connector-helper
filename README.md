@@ -1,12 +1,15 @@
 # Easy Installer and Updater for SAP Cloud Connector and SAP JVM
 
-This suite of Bash scripts automates the update or installation process of the SAP Cloud Connector and the SAP Java Virtual Machine (SAPJVM) on Linux systems with `x86_64` architecture. It facilitates the management of the lifecycle for both the SAP Cloud Connector and SAP JVM by automating version checks, downloading the latest versions available online, and ensuring the integrity of downloaded packages through SHA1 hash verification.
+This suite of Bash scripts automates the update or installation process of the SAP Cloud Connector and the SAP Java Virtual Machine (SAPJVM) on RPM-based Linux systems with `x86_64` architecture. It facilitates the management of the lifecycle for both the SAP Cloud Connector and SAP JVM by automating version checks, downloading the latest versions available online, and ensuring the integrity of downloaded packages through the checksum files published by SAP.
 
 ## Supported Distributions
 - Red Hat Enterprise Linux (RHEL)
 - CentOS
+- Rocky Linux / AlmaLinux
 - Fedora
-- openSUSE
+- SUSE Linux Enterprise Server / openSUSE
+
+The scripts are not portable UNIX installers. They do not support Debian, Ubuntu, macOS, BSD, AIX, Solaris, or non-`x86_64` architectures because SAP's Linux installer artifacts handled here are RPM packages.
 
 ## Overview
 
@@ -20,9 +23,8 @@ The scripts automate several tasks for managing the SAP Cloud Connector and SAP 
 - **Determining the currently installed versions**: By querying installed RPM packages.
 - **Searching for the latest versions**: Checks online for the available versions and selects the most recent versions.
 - **Downloading the necessary files**: Includes both the SAP Cloud Connector and JVM packages along with their associated SHA1 hash files, while respecting EULA conditions.
-- **Verifying integrity**: Ensures the downloaded files match their SHA1 hashes to guarantee file integrity.
+- **Verifying integrity**: Ensures the downloaded files match the checksum files published by SAP.
 - **Installation or update**: Utilizes RPM for installing or updating the SAP Cloud Connector and SAP JVM.
-- **Service restart**: Restarts the SAP Cloud Connector service to activate the latest versions.
 - **Cleanup**: Removes downloaded and temporary files after completion.
 
 ## Requirements
@@ -30,8 +32,10 @@ The scripts automate several tasks for managing the SAP Cloud Connector and SAP 
 Before running any of the scripts, ensure your system has the necessary tools installed:
 
 ```shell
-yum -y install wget curl unzip
+dnf -y install curl unzip coreutils
 ```
+
+The scripts can install these prerequisites automatically with `dnf`, `yum`, or `zypper` when the package manager is available.
 
 ## Running the Scripts
 
@@ -42,7 +46,7 @@ To update existing installations of the SAP Cloud Connector and SAP JVM, use the
 Execute the following command to update:
 
 ```shell
-bash -c "$(wget -qLO - https://github.com/robertfels/cloud-connector-helper/raw/main/update.sh)"
+bash -c "$(curl -fsSL https://github.com/robertfels/cloud-connector-helper/raw/main/update.sh)"
 ```
 
 ### Install the SAP Cloud Connector and JVM
@@ -52,8 +56,15 @@ If the SAP Cloud Connector and SAP JVM are not installed on your system, you can
 Execute the following command to install:
 
 ```shell
-bash -c "$(wget -qLO - https://github.com/robertfels/cloud-connector-helper/raw/main/install.sh)"
+bash -c "$(curl -fsSL https://github.com/robertfels/cloud-connector-helper/raw/main/install.sh)"
 ```
+
+## Security Notes
+
+- Downloads are restricted to HTTPS and TLS 1.2 or newer.
+- Temporary files are created in a private `mktemp` directory and removed after use.
+- The scripts fail early on unsupported operating systems, architectures, and systems without RPM support.
+- SAP currently publishes SHA1 checksum files for these artifacts. SHA1 is not collision-resistant, but the scripts keep the verification because it is the upstream integrity metadata available for these downloads.
 
 ## Notes
 

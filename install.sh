@@ -1,166 +1,183 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-echo "Updating system and installing required packages..."
-sudo yum update -y
-sudo yum -y install curl unzip
-
-# URL and basic information
-URL="https://tools.hana.ondemand.com/#cloud"
+TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
+USER_AGENT="cloud-connector-helper/1.0"
+WORK_DIR=""
 
-# Function to update SAP Cloud Connector
-update_scc() {
-    local INSTALLED_PACKAGE=$(rpm -qa | grep "com.sap.scc-ui")
-    local CURRENT_VERSION=$(echo "$INSTALLED_PACKAGE" | grep -oP "[0-9]+\.[0-9]+\.[0-9]+")
-    local NEW_VERSION=$(curl -s "$URL" | grep -oP "sapcc-\K[0-9.]+(?=-linux-x64.zip)" | sort -V | tail -n1)
-    
-    update_common "SAP Cloud Connector" "sapcc" "$CURRENT_VERSION" "$NEW_VERSION"
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
 }
 
-# Function to update SAP JVM
-update_jvm() {
-    local INSTALLED_PACKAGE=$(rpm -qa | grep "sapjvm")
-    local CURRENT_VERSION=$(echo "$INSTALLED_PACKAGE" | sed 's/sapjvm-\([^-]*\)-\([^-]*\).*/\1.\2/')
-    local NEW_VERSION=$(curl -s "$URL" | grep -oP "sapjvm-\K[0-9.]+(?=-linux-x64.zip)" | sort -V | tail -n1)
-    
-    update_common "SAP JVM" "sapjvm" "$CURRENT_VERSION" "$NEW_VERSION" "rpm"
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
-# Common update function
-update_common() {
-    local PRODUCT_NAME=$1
-    local PRODUCT_PREFIX=$2
-    local CURRENT_VERSION=$3
-    local NEW_VERSION=$4
-    local FILE_TYPE=${5:-zip} # Default to zip if not specified
-    
-    echo "Checking for $PRODUCT_NAME update..."
-    
-    if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
-        echo "The latest version of $PRODUCT_NAME is already installed: $CURRENT_VERSION"
-        return 0
-    fi
-    
-    echo "The following version of the $PRODUCT_NAME would be installed: $NEW_VERSION"
-    read -p "Do you want to proceed with the installation? (y/N) " PROCEED_UPDATE
-    
-    if [ "${PROCEED_UPDATE,,}" != "y" ]; then
-        echo "Installation aborted by the user."
-        return 1
-    fi
-    
-    # Download and update process
-    download_and_update "$PRODUCT_NAME" "$PRODUCT_PREFIX" "$NEW_VERSION" "$FILE_TYPE"
-}
-
-# Download and update process
-download_and_update() {
-    local PRODUCT_NAME=$1
-    local PRODUCT_PREFIX=$2
-    local NEW_VERSION=$3
-    local FILE_TYPE=$4
-    
-    local DOWNLOAD_URL="$DOWNLOAD_BASE_URL/$PRODUCT_PREFIX-$NEW_VERSION-linux-x64.$FILE_TYPE"
-    local SHA1_URL="$DOWNLOAD_URL.sha1"
-    
-    # Use a common cleanup function defined outside this scope
-    
-    mkdir -p update_temp && cd update_temp || { echo "Failed to create/update directory."; exit 1; }
-    
-    echo "Downloading the new $PRODUCT_NAME version..."
-    if ! curl -# -b "$EULA_COOKIE_NAME=$EULA_COOKIE_VALUE" -O "$DOWNLOAD_URL"; then
-        echo "Failed to download the $PRODUCT_NAME version."
-        cleanup
-        return 1
-    fi
-    
-    echo "Downloading SHA1 hash..."
-    if ! curl -# -b "$EULA_COOKIE_NAME=$EULA_COOKIE_VALUE" -O "$SHA1_URL"; then
-        echo "Failed to download the SHA1 hash."
-        cleanup
-        return 1
-    fi
-    
-    local FILENAME="$PRODUCT_PREFIX-$NEW_VERSION-linux-x64.$FILE_TYPE"
-    local SHA1_FILENAME="$FILENAME.sha1"
-    
-    verify_hash "$FILENAME" "$SHA1_FILENAME"
-    
-    if [ "$FILE_TYPE" = "zip" ]; then
-        unzip "$FILENAME"
-    fi
-    
-    local RPM_PACKAGE=$(ls *.rpm)
-    
-    echo "Install $PRODUCT_NAME..."
-    if ! sudo rpm -U "$RPM_PACKAGE"; then
-        echo "Installation failed."
-        cleanup
-        return 1
-    fi
-    
-    cleanup
-    echo "$PRODUCT_NAME installation completed."
-}
-
-# Cleanup function
 cleanup() {
-    echo "Cleaning up temporary files..."
-    cd ..
-    rm -rf update_temp
-}
-
-# Verify the SHA1 hash
-verify_hash() {
-    local FILENAME=$1
-    local SHA1_FILENAME=$2
-    
-    echo "Verifying the SHA1 hash..."
-    local SHA1SUM_EXPECTED=$(cat "$SHA1_FILENAME")
-    local SHA1SUM_ACTUAL=$(sha1sum "$FILENAME" | awk '{print $1}')
-    
-    if [ "$SHA1SUM_EXPECTED" != "$SHA1SUM_ACTUAL" ]; then
-        echo "Hash verification failed. Install aborted."
-        cleanup
-        exit 1
+    if [[ -n "${WORK_DIR:-}" && -d "$WORK_DIR" ]]; then
+        rm -rf "$WORK_DIR"
     fi
-    
-    echo "Hash verification successful."
+}
+trap cleanup EXIT
+
+require_supported_platform() {
+    [[ "$(uname -s)" == "Linux" ]] || die "This helper supports Linux only."
+    [[ "$(uname -m)" == "x86_64" ]] || die "This helper supports x86_64 only."
+    command_exists rpm || die "This helper installs SAP RPM packages and requires rpm."
 }
 
-# Extract EULA information once for both updates
-EULA_COOKIE_NAME=$(curl -s "$URL" | grep -oP "eulaConst.devLicense.cookieName = '\K[^']+" )
-EULA_COOKIE_VALUE=$(curl -s "$URL" | grep -oP "eulaConst.devLicense.cookieValue = '\K[^']+" )
+install_required_packages() {
+    local packages=(curl unzip coreutils)
 
-if [ -z "$EULA_COOKIE_VALUE" ]; then
-    echo "Failed to extract EULA cookie value."
-    exit 1
-fi
+    echo "Installing required packages..."
+    if command_exists dnf; then
+        sudo dnf -y install "${packages[@]}"
+    elif command_exists yum; then
+        sudo yum -y install "${packages[@]}"
+    elif command_exists zypper; then
+        sudo zypper --non-interactive install "${packages[@]}"
+    else
+        die "No supported package manager found. Install curl, unzip, and coreutils manually."
+    fi
+}
 
-EULA_URL="https://$EULA_COOKIE_VALUE"
+fetch_tools_page() {
+    curl -fsSL --proto '=https' --tlsv1.2 --user-agent "$USER_AGENT" "$TOOLS_URL"
+}
 
-echo "Please read the EULA at: $EULA_URL"
-read -p "Do you accept the EULA? (y/N) " ACCEPT_EULA
+extract_eula_cookie_name() {
+    sed -nE "s/.*eulaConst\.devLicense\.cookieName = '([^']+)'.*/\1/p" <<< "$1" | head -n1
+}
 
-if [ "${ACCEPT_EULA,,}" != "y" ]; then
-    echo "You did not accept the EULA. Install aborted."
-    exit 1
-fi
+extract_eula_cookie_value() {
+    sed -nE "s/.*eulaConst\.devLicense\.cookieValue = '([^']+)'.*/\1/p" <<< "$1" | head -n1
+}
 
-# Ask user for each product update
-read -p "Do you want to install SAP JVM? (y/N) " UPDATE_JVM
-if [ "${UPDATE_JVM,,}" = "y" ]; then
-    update_jvm
-fi
+latest_version() {
+    local page=$1
+    local prefix=$2
+    local extension=$3
 
-read -p "Do you want to install SAP Cloud Connector? (y/N) " UPDATE_SCC
-if [ "${UPDATE_SCC,,}" = "y" ]; then
-    update_scc
-fi
+    { grep -Eo "${prefix}-[0-9.]+-linux-x64\.${extension}" <<< "$page" || true; } \
+        | sed -E "s/${prefix}-([0-9.]+)-linux-x64\.${extension}/\1/" \
+        | sort -V \
+        | tail -n1
+}
 
-echo "All installations are completed."
-echo ""
-IP_ADDRESS=$(hostname -I | awk '{print $1}') # Gets the first IP address
-echo "Login via https://${IP_ADDRESS}:8443"
-echo "Username: Administrator"
-echo "Password: manage"
+download_file() {
+    local url=$1
+    local output=$2
+
+    curl -fL --proto '=https' --tlsv1.2 --user-agent "$USER_AGENT" \
+        -b "$EULA_COOKIE_NAME=$EULA_COOKIE_VALUE" \
+        -o "$output" \
+        "$url"
+}
+
+verify_sha1() {
+    local filename=$1
+    local sha1_filename=$2
+    local expected
+    local actual
+
+    expected=$(awk '{print $1}' "$sha1_filename")
+    actual=$(sha1sum "$filename" | awk '{print $1}')
+
+    [[ -n "$expected" ]] || die "SHA1 file is empty: $sha1_filename"
+    [[ "$expected" == "$actual" ]] || die "Hash verification failed for $filename"
+}
+
+install_rpm() {
+    local rpm_package=$1
+
+    sudo rpm -Uvh "$rpm_package"
+}
+
+download_and_install() {
+    local product_name=$1
+    local product_prefix=$2
+    local version=$3
+    local file_type=$4
+    local artifact="${product_prefix}-${version}-linux-x64.${file_type}"
+    local download_url="${DOWNLOAD_BASE_URL}/${artifact}"
+    local sha1_url="${download_url}.sha1"
+    local previous_dir=$PWD
+    local rpm_package
+    local -a rpm_packages
+
+    [[ -n "$version" ]] || die "Could not determine latest $product_name version."
+
+    WORK_DIR=$(mktemp -d)
+    cd "$WORK_DIR"
+
+    echo "Downloading $product_name $version..."
+    download_file "$download_url" "$artifact" || die "Failed to download $download_url"
+    download_file "$sha1_url" "${artifact}.sha1" || die "Failed to download $sha1_url"
+    verify_sha1 "$artifact" "${artifact}.sha1"
+
+    if [[ "$file_type" == "zip" ]]; then
+        unzip -q "$artifact" || die "Failed to extract $artifact"
+        mapfile -t rpm_packages < <(find . -maxdepth 1 -type f -name '*.rpm' -print)
+        [[ "${#rpm_packages[@]}" -eq 1 ]] || die "Expected one RPM in $artifact, found ${#rpm_packages[@]}."
+        rpm_package=${rpm_packages[0]}
+    else
+        rpm_package=$artifact
+    fi
+
+    echo "Installing $product_name..."
+    install_rpm "$rpm_package" || die "Failed to install $product_name"
+    cd "$previous_dir"
+    cleanup
+    WORK_DIR=""
+    echo "$product_name installation completed."
+}
+
+ask_yes_no() {
+    local prompt=$1
+    local response
+
+    read -r -p "$prompt (y/N) " response
+    [[ "${response,,}" == "y" ]]
+}
+
+main() {
+    local tools_page
+    local scc_version
+    local jvm_version
+
+    require_supported_platform
+    install_required_packages
+
+    tools_page=$(fetch_tools_page)
+    EULA_COOKIE_NAME=$(extract_eula_cookie_name "$tools_page")
+    EULA_COOKIE_VALUE=$(extract_eula_cookie_value "$tools_page")
+    [[ -n "$EULA_COOKIE_NAME" && -n "$EULA_COOKIE_VALUE" ]] || die "Failed to extract EULA cookie information."
+
+    echo "Please read the EULA at: https://${EULA_COOKIE_VALUE}"
+    ask_yes_no "Do you accept the EULA?" || die "You did not accept the EULA. Install aborted."
+
+    jvm_version=$(latest_version "$tools_page" "sapjvm" "rpm")
+    scc_version=$(latest_version "$tools_page" "sapcc" "zip")
+
+    if ask_yes_no "Do you want to install SAP JVM ${jvm_version}?"; then
+        download_and_install "SAP JVM" "sapjvm" "$jvm_version" "rpm"
+    fi
+
+    if ask_yes_no "Do you want to install SAP Cloud Connector ${scc_version}?"; then
+        download_and_install "SAP Cloud Connector" "sapcc" "$scc_version" "zip"
+    fi
+
+    echo "All installations are completed."
+    if command_exists hostname; then
+        ip_address=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+        if [[ -n "${ip_address:-}" ]]; then
+            echo "Login via https://${ip_address}:8443"
+            echo "Username: Administrator"
+            echo "Password: manage"
+        fi
+    fi
+}
+
+main "$@"
