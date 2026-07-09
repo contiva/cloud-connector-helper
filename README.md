@@ -16,7 +16,9 @@ The scripts support two install modes:
 - **RPM mode** on RPM-based distributions with `dnf`, `yum`, or `zypper`.
 - **Archive mode** on `apt-get` or `pacman` based distributions, using SAP's Linux `zip`/`tar.gz` artifacts under `/opt/sap` by default.
 
-These are Linux installers, not portable UNIX installers. They do not support macOS, BSD, AIX, Solaris, non-`x86_64` architectures, or musl-based distributions such as Alpine Linux because the SAP artifacts handled here are published for Linux x64 glibc environments.
+`install.sh` and `update.sh` are Linux installers. They do not support BSD, AIX, Solaris, non-`x86_64` architectures, or musl-based distributions such as Alpine Linux because the SAP artifacts they handle are published for Linux x64 glibc environments.
+
+For macOS there is a separate pair of scripts, `install-macos.sh` and `update-macos.sh` — see [macOS (development and testing only)](#macos-development-and-testing-only).
 
 ## Overview
 
@@ -110,6 +112,46 @@ Example of an unattended installation (the `install.sh` after the closing quote 
 ```shell
 bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main/install.sh)" install.sh --unattended --accept-eula
 ```
+
+## macOS (development and testing only)
+
+SAP publishes the Cloud Connector for macOS (`x86_64` and Apple Silicon) for **non-productive use only**. The macOS helpers reflect that: they run entirely without root privileges, install to `~/sap/cloud-connector` (override with `INSTALL_ROOT` or `SCC_HOME`), and manage the Cloud Connector as a per-user launchd agent (`com.sap.scc`) that starts at login.
+
+A Java runtime (1.8, 17, 21, or 25) must already be installed; it is discovered via `/usr/libexec/java_home`. On Apple Silicon, use a native ARM build such as [SapMachine](https://sapmachine.io) (`brew install --cask sapmachine-jdk`) — the SAP JVM 8 is not available for ARM.
+
+```shell
+bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main/install-macos.sh)"
+bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main/update-macos.sh)"
+```
+
+Both scripts support `--unattended` (the installer requires `--accept-eula`), `--scc-version <x.y.z>`, `--dry-run` (the updater exits with code `2` when an update is available), and `--quiet` (verbose output goes to `~/Library/Logs/cloud-connector-helper.log`). The Cloud Connector's own output is written to `~/Library/Logs/com.sap.scc.log`. Configuration in `config`/`scc_config` is preserved across updates.
+
+Manage the launch agent with:
+
+```shell
+launchctl print "gui/$(id -u)/com.sap.scc"      # status
+launchctl bootout "gui/$(id -u)/com.sap.scc"    # stop
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.sap.scc.plist  # start
+```
+
+## Windows (not yet verified)
+
+SAP publishes the Cloud Connector for Windows as an MSI installer (production-supported) plus a portable ZIP. The PowerShell helpers `install-windows.ps1` and `update-windows.ps1` download the MSI, verify its SHA1 checksum, and install or upgrade it silently via `msiexec /qn` with the installer defaults (`C:\SAP\scc`, port 8443). The MSI registers the "SAP Cloud Connector" Windows service; the updater stops it before and starts it after the upgrade. Administrator privileges are required (except for `-DryRun`).
+
+> **Warning:** SAP does not officially document silent-install MSI properties for the Cloud Connector, and these scripts have not yet been verified on a Windows host. Test on a non-productive machine first. An MSI log is written to `%TEMP%\cloud-connector-helper-msi.log`.
+
+A JDK (SAP JVM 8, SapMachine 17/21, or another supported JDK) must be installed beforehand; the scripts warn if none is found via `JAVA_HOME` or `PATH`.
+
+```powershell
+# In an elevated PowerShell:
+Invoke-WebRequest https://github.com/contiva/cloud-connector-helper/raw/main/install-windows.ps1 -OutFile install-windows.ps1
+.\install-windows.ps1 [-Unattended -AcceptEula] [-SccVersion <x.y.z>] [-DryRun]
+
+Invoke-WebRequest https://github.com/contiva/cloud-connector-helper/raw/main/update-windows.ps1 -OutFile update-windows.ps1
+.\update-windows.ps1 [-Unattended] [-SccVersion <x.y.z>] [-DryRun]
+```
+
+`update-windows.ps1 -DryRun` exits with code `2` when an update is available and `0` when everything is up to date.
 
 ## Security Notes
 

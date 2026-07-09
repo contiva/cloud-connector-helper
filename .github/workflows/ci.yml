@@ -14,5 +14,16 @@ jobs:
         run: |
           bash -n install.sh
           bash -n update.sh
+          bash -n install-macos.sh
+          bash -n update-macos.sh
       - name: Run ShellCheck
-        run: shellcheck -S style install.sh update.sh
+        run: shellcheck -S style install.sh update.sh install-macos.sh update-macos.sh
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $all = @()
+          foreach ($f in @('./install-windows.ps1', './update-windows.ps1')) {
+            $all += Invoke-ScriptAnalyzer -Path $f -Severity Warning,Error
+          }
+          if ($all.Count -gt 0) { $all | Format-Table -AutoSize; exit 1 }
