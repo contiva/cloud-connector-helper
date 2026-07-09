@@ -36,7 +36,7 @@ $ErrorActionPreference = "Stop"
 
 $ToolsUrl = "https://tools.hana.ondemand.com/#cloud"
 $DownloadBaseUrl = "https://tools.hana.ondemand.com/additional"
-$UserAgent = "cloud-connector-helper/1.4"
+$UserAgent = "cloud-connector-helper/1.5"
 $ServiceDisplayName = "SAP Cloud Connector*"
 
 function Write-Info([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
