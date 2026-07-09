@@ -12,12 +12,14 @@ The helpers determine the currently installed version, discover the latest relea
 
 | Platform | Scripts | Products | Service | Status |
 | --- | --- | --- | --- | --- |
-| **Linux** (x86_64, glibc) | `install.sh` / `update.sh` | Cloud Connector + SAP JVM 8 | systemd (`scc_daemon`) | Production-ready, tested |
+| **Linux** (x86_64, aarch64, ppc64le³; glibc) | `install.sh` / `update.sh` | Cloud Connector + SAP JVM 8⁴ | systemd (`scc_daemon`) | Production-ready, tested |
 | **macOS** (Apple Silicon & Intel) | `install-macos.sh` / `update-macos.sh` | Cloud Connector | launchd agent (`com.sap.scc`) | Tested — dev/test use only¹ |
 | **Windows** (x64) | `install-windows.ps1` / `update-windows.ps1` | Cloud Connector (MSI) | Windows service | ⚠️ Not yet verified² |
 
 ¹ SAP supports the macOS Cloud Connector for non-productive scenarios only.
 ² SAP does not document silent-install MSI properties; verify on a test machine before rollout.
+³ ppc64le support is untested (no IBM Power hardware available); x86_64 and aarch64 are tested.
+⁴ SAP does not publish the SAP JVM for aarch64 — there, an existing JDK (e.g. [SapMachine](https://sapmachine.io) or the distribution's OpenJDK) is detected and used instead.
 
 ## Quick Start
 
@@ -82,7 +84,9 @@ All platforms share the same core options (PowerShell uses `-PascalCase` switche
 | Debian, Ubuntu | `apt-get` | Archive |
 | Arch Linux | `pacman` | Archive |
 
-Requirements: `x86_64` architecture and glibc. BSD, AIX, Solaris, other architectures, and musl-based distributions such as Alpine Linux are not supported because SAP publishes these artifacts for Linux x64 glibc environments only. Root privileges (or `sudo`) are required; missing prerequisites (`ca-certificates`, `curl`, `unzip`, `coreutils`, and in archive mode `tar`/`gzip`) are installed automatically.
+Requirements: `x86_64`, `aarch64`, or `ppc64le` architecture and glibc. BSD, AIX, Solaris, other architectures, and musl-based distributions such as Alpine Linux are not supported because SAP publishes these artifacts for Linux glibc environments only. Root privileges (or `sudo`) are required; missing prerequisites (`ca-certificates`, `curl`, `unzip`, `coreutils`, and in archive mode `tar`/`gzip`) are installed automatically.
+
+On `aarch64` (e.g. AWS Graviton, Azure Ampere), SAP does not publish the SAP JVM. The scripts skip the JVM there and use an existing Java runtime instead (found via `JAVA_HOME` or `PATH`); install a JDK 17/21 such as [SapMachine](https://sapmachine.io) or your distribution's OpenJDK before running `install.sh`. `ppc64le` support is implemented symmetrically to `x86_64` (including the SAP JVM) but untested.
 
 ### Install modes
 

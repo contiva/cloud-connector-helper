@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
-USER_AGENT="cloud-connector-helper/1.4"
+USER_AGENT="cloud-connector-helper/1.5"
 UNATTENDED=false
 ACCEPT_EULA=false
 QUIET=false
@@ -16,6 +16,8 @@ LOG_FILE="${LOG_FILE:-/var/log/cloud-connector-helper.log}"
 WORK_DIR=""
 PACKAGE_MANAGER=""
 INSTALL_MODE=""
+LINUX_ARCH=""
+JVM_AVAILABLE=true
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/sap}"
 SAPJVM_HOME="${SAPJVM_HOME:-${INSTALL_ROOT}/sapjvm_8}"
 SCC_HOME="${SCC_HOME:-${INSTALL_ROOT}/cloud-connector}"
@@ -111,7 +113,7 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [--unattended] [--accept-eula] [--jvm-version <version>] [--scc-version <version>]
 
-Installs SAP JVM and SAP Cloud Connector on supported Linux x86_64 glibc systems.
+Installs SAP JVM and SAP Cloud Connector on supported Linux glibc systems (x86_64, aarch64, ppc64le).
 
   --unattended            Run without prompts; requires --accept-eula.
   --accept-eula           Accept the SAP developer EULA without prompting.
@@ -185,8 +187,23 @@ detect_package_manager() {
 
 require_supported_platform() {
     [[ "$(uname -s)" == "Linux" ]] || die "This helper supports Linux only."
-    [[ "$(uname -m)" == "x86_64" ]] || die "This helper supports x86_64 only."
-    getconf GNU_LIBC_VERSION >/dev/null 2>&1 || die "SAP Linux x64 artifacts require glibc; musl-based distributions such as Alpine Linux are not supported."
+    case "$(uname -m)" in
+        x86_64)
+            LINUX_ARCH=x64
+            ;;
+        aarch64)
+            LINUX_ARCH=aarch64
+            # SAP does not publish the SAP JVM for aarch64; an existing JDK is used instead.
+            JVM_AVAILABLE=false
+            ;;
+        ppc64le)
+            LINUX_ARCH=ppc64le
+            ;;
+        *)
+            die "Unsupported architecture: $(uname -m). SAP publishes Linux artifacts for x86_64, aarch64, and ppc64le."
+            ;;
+    esac
+    getconf GNU_LIBC_VERSION >/dev/null 2>&1 || die "SAP Linux artifacts require glibc; musl-based distributions such as Alpine Linux are not supported."
 
     detect_package_manager
     case "$PACKAGE_MANAGER" in
@@ -248,8 +265,8 @@ list_versions() {
 
     safe_extension=$(sed -E 's/[][\/.^$*+?{}()|]/\\&/g' <<< "$extension")
 
-    { grep -Eo "${prefix}-[0-9.]+-linux-x64\.${safe_extension}" <<< "$page" || true; } \
-        | sed -E "s/${prefix}-([0-9.]+)-linux-x64\.${safe_extension}/\1/" \
+    { grep -Eo "${prefix}-[0-9.]+-linux-${LINUX_ARCH}\.${safe_extension}" <<< "$page" || true; } \
+        | sed -E "s/${prefix}-([0-9.]+)-linux-${LINUX_ARCH}\.${safe_extension}/\1/" \
         | sort -uV
 }
 
@@ -264,8 +281,8 @@ resolve_version() {
     local override=$4
 
     if [[ -n "$override" ]]; then
-        grep -qF "${prefix}-${override}-linux-x64.${extension}" <<< "$page" \
-            || die "Version ${override} of ${prefix} is not available. Available versions: $(list_versions "$page" "$prefix" "$extension" | tr '\n' ' ')"
+        grep -qF "${prefix}-${override}-linux-${LINUX_ARCH}.${extension}" <<< "$page" \
+            || die "Version ${override} of ${prefix} is not available for linux-${LINUX_ARCH}. Available versions: $(list_versions "$page" "$prefix" "$extension" | tr '\n' ' ')"
         echo "$override"
         return 0
     fi
@@ -346,6 +363,22 @@ start_scc_service_if_stopped() {
     as_root systemctl start scc_daemon.service || log_error "Failed to start scc_daemon service."
 }
 
+find_system_java() {
+    local java_path
+
+    if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
+        echo "$JAVA_HOME"
+        return 0
+    fi
+    if [[ -x "$SAPJVM_HOME/bin/java" ]]; then
+        echo "$SAPJVM_HOME"
+        return 0
+    fi
+    java_path=$(command -v java 2>/dev/null) || return 1
+    java_path=$(readlink -f "$java_path") || return 1
+    echo "${java_path%/bin/java}"
+}
+
 ensure_scc_user() {
     local nologin_shell
 
@@ -357,12 +390,14 @@ ensure_scc_user() {
 }
 
 setup_scc_service() {
-    if ! systemd_available; then
-        note "systemd not detected; start the Cloud Connector manually with: JAVA_HOME=$SAPJVM_HOME $SCC_HOME/go.sh"
+    local java_home
+
+    if ! java_home=$(find_system_java); then
+        log_error "No Java runtime found; skipping scc_daemon service setup. Start manually with: JAVA_HOME=<jvm> $SCC_HOME/go.sh"
         return 0
     fi
-    if [[ ! -x "$SAPJVM_HOME/bin/java" ]]; then
-        log_error "No SAP JVM found at $SAPJVM_HOME; skipping scc_daemon service setup. Start manually with: JAVA_HOME=<jvm> $SCC_HOME/go.sh"
+    if ! systemd_available; then
+        note "systemd not detected; start the Cloud Connector manually with: JAVA_HOME=$java_home $SCC_HOME/go.sh"
         return 0
     fi
 
@@ -379,7 +414,7 @@ After=network-online.target
 Type=simple
 User=sccadmin
 Group=sccgroup
-Environment=JAVA_HOME=${SAPJVM_HOME}
+Environment=JAVA_HOME=${java_home}
 WorkingDirectory=${SCC_HOME}
 ExecStart=${SCC_HOME}/go.sh
 Restart=on-failure
@@ -444,7 +479,7 @@ download_and_install() {
     local product_prefix=$2
     local version=$3
     local file_type=$4
-    local artifact="${product_prefix}-${version}-linux-x64.${file_type}"
+    local artifact="${product_prefix}-${version}-linux-${LINUX_ARCH}.${file_type}"
     local download_url="${DOWNLOAD_BASE_URL}/${artifact}"
     local sha1_url="${download_url}.sha1"
     local previous_dir=$PWD
@@ -521,11 +556,16 @@ print_install_plan() {
     section "Installation plan"
     echo "  System:               $(os_pretty_name), $(uname -m)"
     echo "  Install mode:         $INSTALL_MODE ($PACKAGE_MANAGER)"
-    if [[ "$INSTALL_MODE" == "archive" ]]; then
+    if ! $JVM_AVAILABLE; then
+        echo "  SAP JVM:              not published for linux-${LINUX_ARCH} (an existing JDK is used)"
+    elif [[ "$INSTALL_MODE" == "archive" ]]; then
         echo "  SAP JVM:              ${jvm_version:-unknown} -> $SAPJVM_HOME"
-        echo "  SAP Cloud Connector:  ${scc_version:-unknown} -> $SCC_HOME"
     else
         echo "  SAP JVM:              ${jvm_version:-unknown} (RPM package)"
+    fi
+    if [[ "$INSTALL_MODE" == "archive" ]]; then
+        echo "  SAP Cloud Connector:  ${scc_version:-unknown} -> $SCC_HOME"
+    else
         echo "  SAP Cloud Connector:  ${scc_version:-unknown} (RPM package)"
     fi
     echo
@@ -608,7 +648,12 @@ main() {
         scc_file_type=zip
     fi
 
-    jvm_version=$(resolve_version "$tools_page" "sapjvm" "$jvm_file_type" "$JVM_VERSION_OVERRIDE")
+    if $JVM_AVAILABLE; then
+        jvm_version=$(resolve_version "$tools_page" "sapjvm" "$jvm_file_type" "$JVM_VERSION_OVERRIDE")
+    else
+        [[ -z "$JVM_VERSION_OVERRIDE" ]] || die "SAP JVM is not published for linux-${LINUX_ARCH}; --jvm-version cannot be used."
+        jvm_version=""
+    fi
     scc_version=$(resolve_version "$tools_page" "sapcc" "$scc_file_type" "$SCC_VERSION_OVERRIDE")
 
     print_install_plan "$jvm_version" "$scc_version"
@@ -625,8 +670,17 @@ main() {
         ask_yes_no "Do you accept the EULA?" || die "You did not accept the EULA. Install aborted."
     fi
 
-    if ask_yes_no "Install SAP JVM ${jvm_version}?" y; then
-        download_and_install "SAP JVM" "sapjvm" "$jvm_version" "$jvm_file_type"
+    if $JVM_AVAILABLE; then
+        if ask_yes_no "Install SAP JVM ${jvm_version}?" y; then
+            download_and_install "SAP JVM" "sapjvm" "$jvm_version" "$jvm_file_type"
+        fi
+    else
+        local java_home
+        if java_home=$(find_system_java); then
+            note "SAP JVM is not published for linux-${LINUX_ARCH}; the Java runtime at $java_home will be used."
+        else
+            die "SAP JVM is not published for linux-${LINUX_ARCH} and no Java runtime was found. Install a JDK 17 or 21 first, e.g. SapMachine (https://sapmachine.io) or your distribution's OpenJDK package."
+        fi
     fi
 
     if ask_yes_no "Install SAP Cloud Connector ${scc_version}?" y; then

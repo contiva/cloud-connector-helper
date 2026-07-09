@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
-USER_AGENT="cloud-connector-helper/1.4"
+USER_AGENT="cloud-connector-helper/1.5"
 UNATTENDED=false
 EMAIL=""
 QUIET=false
@@ -17,6 +17,8 @@ UPDATE_RESULTS=""
 WORK_DIR=""
 PACKAGE_MANAGER=""
 INSTALL_MODE=""
+LINUX_ARCH=""
+JVM_AVAILABLE=true
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/sap}"
 SAPJVM_HOME="${SAPJVM_HOME:-${INSTALL_ROOT}/sapjvm_8}"
 SCC_HOME="${SCC_HOME:-${INSTALL_ROOT}/cloud-connector}"
@@ -127,7 +129,7 @@ usage() {
 Usage: update.sh [--unattended [email]] [--jvm-version <version>] [--scc-version <version>]
 
 Updates installed SAP JVM and SAP Cloud Connector packages on supported
-Linux x86_64 glibc systems.
+Linux glibc systems (x86_64, aarch64, ppc64le).
 
   --unattended [email]    Run without prompts; optionally send a summary email.
   --jvm-version <x.y.z>   Update to this SAP JVM version instead of the latest.
@@ -197,8 +199,23 @@ detect_package_manager() {
 
 require_supported_platform() {
     [[ "$(uname -s)" == "Linux" ]] || die "This helper supports Linux only."
-    [[ "$(uname -m)" == "x86_64" ]] || die "This helper supports x86_64 only."
-    getconf GNU_LIBC_VERSION >/dev/null 2>&1 || die "SAP Linux x64 artifacts require glibc; musl-based distributions such as Alpine Linux are not supported."
+    case "$(uname -m)" in
+        x86_64)
+            LINUX_ARCH=x64
+            ;;
+        aarch64)
+            LINUX_ARCH=aarch64
+            # SAP does not publish the SAP JVM for aarch64; an existing JDK is used instead.
+            JVM_AVAILABLE=false
+            ;;
+        ppc64le)
+            LINUX_ARCH=ppc64le
+            ;;
+        *)
+            die "Unsupported architecture: $(uname -m). SAP publishes Linux artifacts for x86_64, aarch64, and ppc64le."
+            ;;
+    esac
+    getconf GNU_LIBC_VERSION >/dev/null 2>&1 || die "SAP Linux artifacts require glibc; musl-based distributions such as Alpine Linux are not supported."
 
     detect_package_manager
     case "$PACKAGE_MANAGER" in
@@ -260,8 +277,8 @@ list_versions() {
 
     safe_extension=$(sed -E 's/[][\/.^$*+?{}()|]/\\&/g' <<< "$extension")
 
-    { grep -Eo "${prefix}-[0-9.]+-linux-x64\.${safe_extension}" <<< "$page" || true; } \
-        | sed -E "s/${prefix}-([0-9.]+)-linux-x64\.${safe_extension}/\1/" \
+    { grep -Eo "${prefix}-[0-9.]+-linux-${LINUX_ARCH}\.${safe_extension}" <<< "$page" || true; } \
+        | sed -E "s/${prefix}-([0-9.]+)-linux-${LINUX_ARCH}\.${safe_extension}/\1/" \
         | sort -uV
 }
 
@@ -276,8 +293,8 @@ resolve_version() {
     local override=$4
 
     if [[ -n "$override" ]]; then
-        grep -qF "${prefix}-${override}-linux-x64.${extension}" <<< "$page" \
-            || die "Version ${override} of ${prefix} is not available. Available versions: $(list_versions "$page" "$prefix" "$extension" | tr '\n' ' ')"
+        grep -qF "${prefix}-${override}-linux-${LINUX_ARCH}.${extension}" <<< "$page" \
+            || die "Version ${override} of ${prefix} is not available for linux-${LINUX_ARCH}. Available versions: $(list_versions "$page" "$prefix" "$extension" | tr '\n' ' ')"
         echo "$override"
         return 0
     fi
@@ -613,7 +630,7 @@ fetch_and_apply_update() {
     local product_prefix=$2
     local version=$3
     local file_type=$4
-    local artifact="${product_prefix}-${version}-linux-x64.${file_type}"
+    local artifact="${product_prefix}-${version}-linux-${LINUX_ARCH}.${file_type}"
     local download_url="${DOWNLOAD_BASE_URL}/${artifact}"
     local sha1_url="${download_url}.sha1"
     local rpm_package
@@ -744,12 +761,21 @@ main() {
         scc_file_type=zip
     fi
 
-    jvm_version=$(resolve_version "$tools_page" "sapjvm" "$jvm_file_type" "$JVM_VERSION_OVERRIDE")
+    if $JVM_AVAILABLE; then
+        jvm_version=$(resolve_version "$tools_page" "sapjvm" "$jvm_file_type" "$JVM_VERSION_OVERRIDE")
+    else
+        [[ -z "$JVM_VERSION_OVERRIDE" ]] || die "SAP JVM is not published for linux-${LINUX_ARCH}; --jvm-version cannot be used."
+        jvm_version=""
+    fi
     scc_version=$(resolve_version "$tools_page" "sapcc" "$scc_file_type" "$SCC_VERSION_OVERRIDE")
 
     if $DRY_RUN; then
         section "Update check (dry run)"
-        dry_run_check "SAP JVM" "sapjvm" '^sapjvm$' "$jvm_version"
+        if $JVM_AVAILABLE; then
+            dry_run_check "SAP JVM" "sapjvm" '^sapjvm$' "$jvm_version"
+        else
+            note "SAP JVM: not published for linux-${LINUX_ARCH}; managed outside this helper"
+        fi
         dry_run_check "SAP Cloud Connector" "sapcc" '^com[.]sap[.]scc[.-]ui$' "$scc_version"
         echo
         if (( PENDING_UPDATES > 0 )); then
@@ -762,7 +788,12 @@ main() {
 
     ask_or_default_yes "Do you accept the EULA (https://${EULA_COOKIE_VALUE})?" || die "You did not accept the EULA. Update aborted."
 
-    update_common "SAP JVM" "sapjvm" '^sapjvm$' "$jvm_version" "$jvm_file_type" || overall_status=1
+    if $JVM_AVAILABLE; then
+        update_common "SAP JVM" "sapjvm" '^sapjvm$' "$jvm_version" "$jvm_file_type" || overall_status=1
+    else
+        note "SAP JVM is not published for linux-${LINUX_ARCH}; skipping (managed outside this helper)."
+        append_update_results "SAP JVM" "SKIPPED - NOT PUBLISHED FOR ${LINUX_ARCH}"
+    fi
     update_common "SAP Cloud Connector" "sapcc" '^com[.]sap[.]scc[.-]ui$' "$scc_version" "$scc_file_type" || overall_status=1
 
     section "Update Summary"

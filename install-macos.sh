@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
-USER_AGENT="cloud-connector-helper/1.4"
+USER_AGENT="cloud-connector-helper/1.5"
 UNATTENDED=false
 ACCEPT_EULA=false
 QUIET=false
