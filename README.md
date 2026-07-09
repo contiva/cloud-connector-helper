@@ -90,7 +90,11 @@ bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main
 
 Both scripts accept:
 
-- `--jvm-version <x.y.z>` / `--scc-version <x.y.z>`: install or update to a specific version instead of the latest. The version must still be listed on the SAP tools page; otherwise the script aborts.
+- `--jvm-version <x.y.z>` / `--scc-version <x.y.z>`: install or update to a specific version instead of the latest. The version must still be listed on the SAP tools page; otherwise the script aborts and shows the available versions.
+- `--dry-run`: only show what would be installed or updated, without changing anything. For `update.sh`, the exit code is `2` when updates are available and `0` when everything is up to date — handy for monitoring or cron checks.
+- `--quiet`: hide package-manager output; it is appended to `/var/log/cloud-connector-helper.log` instead and shown only if a command fails.
+
+Output is colored when running in a terminal; set `NO_COLOR` to disable this. Download progress bars are shown only in interactive terminals and omitted in logs and unattended runs.
 
 `install.sh` additionally accepts:
 
