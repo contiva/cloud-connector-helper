@@ -3,7 +3,12 @@ set -Eeuo pipefail
 
 TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
-USER_AGENT="cloud-connector-helper/1.0"
+USER_AGENT="cloud-connector-helper/1.2"
+UNATTENDED=false
+ACCEPT_EULA=false
+JVM_VERSION_OVERRIDE=""
+SCC_VERSION_OVERRIDE=""
+SCC_SERVICE_STOPPED=false
 WORK_DIR=""
 PACKAGE_MANAGER=""
 INSTALL_MODE=""
@@ -14,6 +19,10 @@ SCC_HOME="${SCC_HOME:-${INSTALL_ROOT}/cloud-connector}"
 die() {
     echo "ERROR: $*" >&2
     exit 1
+}
+
+log_error() {
+    echo "ERROR: $*" >&2
 }
 
 command_exists() {
@@ -36,6 +45,55 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+
+usage() {
+    cat <<'EOF'
+Usage: install.sh [--unattended] [--accept-eula] [--jvm-version <version>] [--scc-version <version>]
+
+Installs SAP JVM and SAP Cloud Connector on supported Linux x86_64 glibc systems.
+
+  --unattended            Run without prompts; requires --accept-eula.
+  --accept-eula           Accept the SAP developer EULA without prompting.
+  --jvm-version <x.y.z>   Install this SAP JVM version instead of the latest.
+  --scc-version <x.y.z>   Install this SAP Cloud Connector version instead of the latest.
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --unattended)
+                UNATTENDED=true
+                ;;
+            --accept-eula)
+                ACCEPT_EULA=true
+                ;;
+            --jvm-version)
+                JVM_VERSION_OVERRIDE="${2:-}"
+                [[ -n "$JVM_VERSION_OVERRIDE" ]] || die "--jvm-version requires a value."
+                shift
+                ;;
+            --scc-version)
+                SCC_VERSION_OVERRIDE="${2:-}"
+                [[ -n "$SCC_VERSION_OVERRIDE" ]] || die "--scc-version requires a value."
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                usage >&2
+                die "Unknown argument: $1"
+                ;;
+        esac
+        shift
+    done
+
+    if $UNATTENDED && ! $ACCEPT_EULA; then
+        die "Unattended mode requires --accept-eula. Review the EULA at $TOOLS_URL first."
+    fi
+}
 
 detect_package_manager() {
     if command_exists dnf; then
@@ -124,6 +182,21 @@ latest_version() {
         | tail -n1
 }
 
+resolve_version() {
+    local page=$1
+    local prefix=$2
+    local extension=$3
+    local override=$4
+
+    if [[ -n "$override" ]]; then
+        grep -qF "${prefix}-${override}-linux-x64.${extension}" <<< "$page" \
+            || die "Version ${override} of ${prefix} is not available at ${TOOLS_URL}."
+        echo "$override"
+        return 0
+    fi
+    latest_version "$page" "$prefix" "$extension"
+}
+
 download_file() {
     local url=$1
     local output=$2
@@ -153,6 +226,90 @@ install_rpm() {
     as_root rpm -Uvh "$rpm_package"
 }
 
+ensure_not_running() {
+    local product_name=$1
+    local home_dir=$2
+
+    command_exists pgrep || return 0
+    if pgrep -f -- "$home_dir" >/dev/null 2>&1; then
+        die "$product_name appears to be in use: running processes reference $home_dir. Stop the SAP Cloud Connector before installing."
+    fi
+}
+
+systemd_available() {
+    [[ -d /run/systemd/system ]] && command_exists systemctl
+}
+
+scc_service_exists() {
+    systemd_available && [[ -f /etc/systemd/system/scc_daemon.service ]]
+}
+
+stop_scc_service_if_running() {
+    scc_service_exists || return 0
+    if systemctl is-active --quiet scc_daemon.service; then
+        echo "Stopping scc_daemon service..."
+        as_root systemctl stop scc_daemon.service
+        SCC_SERVICE_STOPPED=true
+    fi
+}
+
+start_scc_service_if_stopped() {
+    $SCC_SERVICE_STOPPED || return 0
+    SCC_SERVICE_STOPPED=false
+    echo "Starting scc_daemon service..."
+    as_root systemctl start scc_daemon.service || log_error "Failed to start scc_daemon service."
+}
+
+ensure_scc_user() {
+    local nologin_shell
+
+    getent group sccgroup >/dev/null 2>&1 || as_root groupadd --system sccgroup
+    if ! getent passwd sccadmin >/dev/null 2>&1; then
+        nologin_shell=$(command -v nologin || echo /bin/false)
+        as_root useradd --system --gid sccgroup --home-dir "$SCC_HOME" --no-create-home --shell "$nologin_shell" sccadmin
+    fi
+}
+
+setup_scc_service() {
+    if ! systemd_available; then
+        echo "systemd not detected; start the Cloud Connector manually with: JAVA_HOME=$SAPJVM_HOME $SCC_HOME/go.sh"
+        return 0
+    fi
+    if [[ ! -x "$SAPJVM_HOME/bin/java" ]]; then
+        log_error "No SAP JVM found at $SAPJVM_HOME; skipping scc_daemon service setup. Start manually with: JAVA_HOME=<jvm> $SCC_HOME/go.sh"
+        return 0
+    fi
+
+    ensure_scc_user
+    as_root chown -R sccadmin:sccgroup "$SCC_HOME"
+
+    as_root tee /etc/systemd/system/scc_daemon.service >/dev/null <<EOF
+[Unit]
+Description=SAP Cloud Connector (archive installation)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=sccadmin
+Group=sccgroup
+Environment=JAVA_HOME=${SAPJVM_HOME}
+WorkingDirectory=${SCC_HOME}
+ExecStart=${SCC_HOME}/go.sh
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    as_root systemctl daemon-reload
+    as_root systemctl enable scc_daemon.service
+    as_root systemctl restart scc_daemon.service || log_error "Failed to start scc_daemon service."
+    SCC_SERVICE_STOPPED=false
+    echo "scc_daemon service installed, enabled, and started."
+}
+
 write_version_marker() {
     local target_dir=$1
     local version=$2
@@ -165,6 +322,9 @@ install_sapjvm_archive() {
     local artifact=$1
     local version=$2
     local extract_dir="$WORK_DIR/sapjvm"
+
+    stop_scc_service_if_running
+    ensure_not_running "SAP JVM" "$SAPJVM_HOME"
 
     mkdir -p "$extract_dir"
     unzip -q "$artifact" -d "$extract_dir" || die "Failed to extract $artifact"
@@ -181,13 +341,16 @@ install_scc_archive() {
     local artifact=$1
     local version=$2
 
+    stop_scc_service_if_running
+    ensure_not_running "SAP Cloud Connector" "$SCC_HOME"
+
     as_root rm -rf "$SCC_HOME"
     as_root mkdir -p "$SCC_HOME"
     as_root tar -xzf "$artifact" -C "$SCC_HOME" || die "Failed to extract $artifact"
     [[ -f "$SCC_HOME/go.sh" ]] || die "Expected go.sh in extracted SAP Cloud Connector archive."
     write_version_marker "$SCC_HOME" "$version"
     echo "SAP Cloud Connector archive installed at $SCC_HOME."
-    echo "Start it with: JAVA_HOME=$SAPJVM_HOME $SCC_HOME/go.sh"
+    setup_scc_service
 }
 
 download_and_install() {
@@ -233,12 +396,18 @@ download_and_install() {
     cd "$previous_dir"
     cleanup
     WORK_DIR=""
+    start_scc_service_if_stopped
     echo "$product_name installation completed."
 }
 
 ask_yes_no() {
     local prompt=$1
     local response
+
+    if $UNATTENDED; then
+        echo "$prompt: Auto-accepting for unattended mode."
+        return 0
+    fi
 
     read -r -p "$prompt (y/N) " response
     [[ "${response,,}" == "y" ]]
@@ -251,6 +420,7 @@ main() {
     local scc_file_type
     local jvm_file_type
 
+    parse_args "$@"
     require_supported_platform
     install_required_packages
 
@@ -260,7 +430,11 @@ main() {
     [[ -n "$EULA_COOKIE_NAME" && -n "$EULA_COOKIE_VALUE" ]] || die "Failed to extract EULA cookie information."
 
     echo "Please read the EULA at: https://${EULA_COOKIE_VALUE}"
-    ask_yes_no "Do you accept the EULA?" || die "You did not accept the EULA. Install aborted."
+    if $ACCEPT_EULA; then
+        echo "EULA accepted via --accept-eula."
+    else
+        ask_yes_no "Do you accept the EULA?" || die "You did not accept the EULA. Install aborted."
+    fi
 
     if [[ "$INSTALL_MODE" == "archive" ]]; then
         jvm_file_type=zip
@@ -270,8 +444,8 @@ main() {
         scc_file_type=zip
     fi
 
-    jvm_version=$(latest_version "$tools_page" "sapjvm" "$jvm_file_type")
-    scc_version=$(latest_version "$tools_page" "sapcc" "$scc_file_type")
+    jvm_version=$(resolve_version "$tools_page" "sapjvm" "$jvm_file_type" "$JVM_VERSION_OVERRIDE")
+    scc_version=$(resolve_version "$tools_page" "sapcc" "$scc_file_type" "$SCC_VERSION_OVERRIDE")
 
     if ask_yes_no "Do you want to install SAP JVM ${jvm_version}?"; then
         download_and_install "SAP JVM" "sapjvm" "$jvm_version" "$jvm_file_type"
