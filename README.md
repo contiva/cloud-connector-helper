@@ -1,15 +1,22 @@
 # Easy Installer and Updater for SAP Cloud Connector and SAP JVM
 
-This suite of Bash scripts automates the update or installation process of the SAP Cloud Connector and the SAP Java Virtual Machine (SAPJVM) on RPM-based Linux systems with `x86_64` architecture. It facilitates the management of the lifecycle for both the SAP Cloud Connector and SAP JVM by automating version checks, downloading the latest versions available online, and ensuring the integrity of downloaded packages through the checksum files published by SAP.
+This suite of Bash scripts automates the update or installation process of the SAP Cloud Connector and the SAP Java Virtual Machine (SAPJVM) on common glibc-based Linux distributions with `x86_64` architecture. It facilitates the management of the lifecycle for both the SAP Cloud Connector and SAP JVM by automating version checks, downloading the latest versions available online, and ensuring the integrity of downloaded packages through the checksum files published by SAP.
 
-## Supported Distributions
-- Red Hat Enterprise Linux (RHEL)
-- CentOS
-- Rocky Linux / AlmaLinux
-- Fedora
-- SUSE Linux Enterprise Server / openSUSE
+## Supported Platforms
 
-The scripts are not portable UNIX installers. They do not support Debian, Ubuntu, macOS, BSD, AIX, Solaris, or non-`x86_64` architectures because SAP's Linux installer artifacts handled here are RPM packages.
+| Platform family | Package managers | Install mode |
+| --- | --- | --- |
+| Red Hat Enterprise Linux, CentOS, Rocky Linux, AlmaLinux, Fedora | `dnf`, `yum` | RPM |
+| SUSE Linux Enterprise Server, openSUSE | `zypper` | RPM |
+| Debian, Ubuntu | `apt-get` | Archive |
+| Arch Linux | `pacman` | Archive |
+
+The scripts support two install modes:
+
+- **RPM mode** on RPM-based distributions with `dnf`, `yum`, or `zypper`.
+- **Archive mode** on `apt-get` or `pacman` based distributions, using SAP's Linux `zip`/`tar.gz` artifacts under `/opt/sap` by default.
+
+These are Linux installers, not portable UNIX installers. They do not support macOS, BSD, AIX, Solaris, non-`x86_64` architectures, or musl-based distributions such as Alpine Linux because the SAP artifacts handled here are published for Linux x64 glibc environments.
 
 ## Overview
 
@@ -20,11 +27,11 @@ The toolkit includes:
 
 The scripts automate several tasks for managing the SAP Cloud Connector and SAP JVM:
 
-- **Determining the currently installed versions**: By querying installed RPM packages.
+- **Determining the currently installed versions**: By querying installed RPM packages or archive-mode version markers.
 - **Searching for the latest versions**: Checks online for the available versions and selects the most recent versions.
 - **Downloading the necessary files**: Includes both the SAP Cloud Connector and JVM packages along with their associated SHA1 hash files, while respecting EULA conditions.
 - **Verifying integrity**: Ensures the downloaded files match the checksum files published by SAP.
-- **Installation or update**: Utilizes RPM for installing or updating the SAP Cloud Connector and SAP JVM.
+- **Installation or update**: Utilizes RPM packages on RPM-based systems and archive extraction on other supported Linux distributions.
 - **Cleanup**: Removes downloaded and temporary files after completion.
 
 ## Requirements
@@ -32,10 +39,24 @@ The scripts automate several tasks for managing the SAP Cloud Connector and SAP 
 Before running any of the scripts, ensure your system has the necessary tools installed:
 
 ```shell
-dnf -y install curl unzip coreutils
+dnf -y install ca-certificates curl unzip coreutils
 ```
 
-The scripts can install these prerequisites automatically with `dnf`, `yum`, or `zypper` when the package manager is available.
+The scripts can install these prerequisites automatically with `dnf`, `yum`, `zypper`, `apt-get`, or `pacman` when the package manager is available. Archive mode also requires `tar` and `gzip`, which the scripts install automatically.
+
+Archive mode installs SAP JVM to `/opt/sap/sapjvm_8` and SAP Cloud Connector to `/opt/sap/cloud-connector` unless `INSTALL_ROOT`, `SAPJVM_HOME`, or `SCC_HOME` are set before running the script:
+
+```shell
+INSTALL_ROOT=/srv/sap ./install.sh
+```
+
+Start an archive-mode installation with:
+
+```shell
+JAVA_HOME=/opt/sap/sapjvm_8 /opt/sap/cloud-connector/go.sh
+```
+
+Archive updates detect previous archive installations through helper-managed version marker files in the installation directories.
 
 ## Running the Scripts
 
@@ -63,7 +84,8 @@ bash -c "$(curl -fsSL https://github.com/robertfels/cloud-connector-helper/raw/m
 
 - Downloads are restricted to HTTPS and TLS 1.2 or newer.
 - Temporary files are created in a private `mktemp` directory and removed after use.
-- The scripts fail early on unsupported operating systems, architectures, and systems without RPM support.
+- The scripts fail early on unsupported operating systems, architectures, and package managers.
+- RPM packages are only installed on RPM-based distributions; other supported Linux distributions use SAP's archive artifacts.
 - SAP currently publishes SHA1 checksum files for these artifacts. SHA1 is not collision-resistant, but the scripts keep the verification because it is the upstream integrity metadata available for these downloads.
 
 ## Notes
