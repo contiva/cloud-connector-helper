@@ -50,7 +50,13 @@ Archive mode installs SAP JVM to `/opt/sap/sapjvm_8` and SAP Cloud Connector to 
 INSTALL_ROOT=/srv/sap ./install.sh
 ```
 
-Start an archive-mode installation with:
+On systems with systemd, the archive-mode installer creates a dedicated `sccadmin` system user (group `sccgroup`), installs a `scc_daemon` systemd service, enables it, and starts it. The updater stops the service before replacing files and starts it again afterwards. Manage the service with:
+
+```shell
+systemctl status scc_daemon
+```
+
+Without systemd, start an archive-mode installation manually with:
 
 ```shell
 JAVA_HOME=/opt/sap/sapjvm_8 /opt/sap/cloud-connector/go.sh
@@ -67,7 +73,7 @@ To update existing installations of the SAP Cloud Connector and SAP JVM, use the
 Execute the following command to update:
 
 ```shell
-bash -c "$(curl -fsSL https://github.com/robertfels/cloud-connector-helper/raw/main/update.sh)"
+bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main/update.sh)"
 ```
 
 ### Install the SAP Cloud Connector and JVM
@@ -77,7 +83,28 @@ If the SAP Cloud Connector and SAP JVM are not installed on your system, you can
 Execute the following command to install:
 
 ```shell
-bash -c "$(curl -fsSL https://github.com/robertfels/cloud-connector-helper/raw/main/install.sh)"
+bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main/install.sh)"
+```
+
+### Options
+
+Both scripts accept:
+
+- `--jvm-version <x.y.z>` / `--scc-version <x.y.z>`: install or update to a specific version instead of the latest. The version must still be listed on the SAP tools page; otherwise the script aborts.
+
+`install.sh` additionally accepts:
+
+- `--unattended`: run without prompts; requires `--accept-eula`.
+- `--accept-eula`: accept the SAP developer EULA without prompting. Read it first at <https://tools.hana.ondemand.com/#cloud>.
+
+`update.sh` additionally accepts:
+
+- `--unattended [email]`: run without prompts; optionally send a summary email via `sendmail`.
+
+Example of an unattended installation (the `install.sh` after the closing quote is the `$0` placeholder required by `bash -c`):
+
+```shell
+bash -c "$(curl -fsSL https://github.com/contiva/cloud-connector-helper/raw/main/install.sh)" install.sh --unattended --accept-eula
 ```
 
 ## Security Notes
@@ -92,6 +119,9 @@ bash -c "$(curl -fsSL https://github.com/robertfels/cloud-connector-helper/raw/m
 
 - Ensure you have sufficient permissions (e.g., root or sudo) to install software and manage services on your system.
 - It is highly recommended to create a backup of your system configuration and any existing SAP Cloud Connector and JVM settings before running these scripts.
+- In archive mode, the scripts stop a helper-managed `scc_daemon` service before replacing files and refuse to proceed while other SAP Cloud Connector processes are still running.
+- Before each RPM-mode Cloud Connector update, the `config` and `scc_config` directories under `/opt/sap/scc` are backed up to `/opt/sap/scc.config-backup`; only the most recent backup is kept. Archive mode preserves the configuration in place across updates.
+- The updater attempts both products even if one of them fails and prints a summary at the end. In unattended mode with an email recipient, the summary is also sent by mail — including when an update fails or the script aborts.
 
 These scripts aim to streamline the installation and update processes for the SAP Cloud Connector and Java Virtual Machine, reducing manual effort and ensuring consistency across installations.
 

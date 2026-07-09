@@ -3,9 +3,12 @@ set -Eeuo pipefail
 
 TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
-USER_AGENT="cloud-connector-helper/1.0"
+USER_AGENT="cloud-connector-helper/1.2"
 UNATTENDED=false
 EMAIL=""
+JVM_VERSION_OVERRIDE=""
+SCC_VERSION_OVERRIDE=""
+SCC_SERVICE_STOPPED=false
 UPDATE_RESULTS=""
 WORK_DIR=""
 PACKAGE_MANAGER=""
@@ -13,10 +16,15 @@ INSTALL_MODE=""
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/sap}"
 SAPJVM_HOME="${SAPJVM_HOME:-${INSTALL_ROOT}/sapjvm_8}"
 SCC_HOME="${SCC_HOME:-${INSTALL_ROOT}/cloud-connector}"
+SCC_RPM_HOME="${SCC_RPM_HOME:-/opt/sap/scc}"
 
 die() {
     echo "ERROR: $*" >&2
     exit 1
+}
+
+log_error() {
+    echo "ERROR: $*" >&2
 }
 
 command_exists() {
@@ -38,34 +46,62 @@ cleanup() {
         rm -rf "$WORK_DIR"
     fi
 }
-trap cleanup EXIT
+
+on_exit() {
+    local exit_code=$?
+
+    cleanup
+    if [[ "$exit_code" -ne 0 && -z "$UPDATE_RESULTS" ]]; then
+        UPDATE_RESULTS=$'\n'"Update aborted before any product update ran (exit code ${exit_code})."
+    fi
+    send_update_email || true
+}
+trap on_exit EXIT
 
 usage() {
     cat <<'EOF'
-Usage: update.sh [--unattended [email]]
+Usage: update.sh [--unattended [email]] [--jvm-version <version>] [--scc-version <version>]
 
 Updates installed SAP JVM and SAP Cloud Connector packages on supported
 Linux x86_64 glibc systems.
+
+  --unattended [email]    Run without prompts; optionally send a summary email.
+  --jvm-version <x.y.z>   Update to this SAP JVM version instead of the latest.
+  --scc-version <x.y.z>   Update to this SAP Cloud Connector version instead of the latest.
 EOF
 }
 
 parse_args() {
-    case "${1:-}" in
-        "")
-            ;;
-        --unattended)
-            UNATTENDED=true
-            EMAIL="${2:-}"
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            usage
-            exit 1
-            ;;
-    esac
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --unattended)
+                UNATTENDED=true
+                if [[ $# -gt 1 && "${2#-}" == "$2" ]]; then
+                    EMAIL=$2
+                    shift
+                fi
+                ;;
+            --jvm-version)
+                JVM_VERSION_OVERRIDE="${2:-}"
+                [[ -n "$JVM_VERSION_OVERRIDE" ]] || die "--jvm-version requires a value."
+                shift
+                ;;
+            --scc-version)
+                SCC_VERSION_OVERRIDE="${2:-}"
+                [[ -n "$SCC_VERSION_OVERRIDE" ]] || die "--scc-version requires a value."
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
 }
 
 detect_package_manager() {
@@ -155,6 +191,21 @@ latest_version() {
         | tail -n1
 }
 
+resolve_version() {
+    local page=$1
+    local prefix=$2
+    local extension=$3
+    local override=$4
+
+    if [[ -n "$override" ]]; then
+        grep -qF "${prefix}-${override}-linux-x64.${extension}" <<< "$page" \
+            || die "Version ${override} of ${prefix} is not available at ${TOOLS_URL}."
+        echo "$override"
+        return 0
+    fi
+    latest_version "$page" "$prefix" "$extension"
+}
+
 archive_installed_version() {
     local product_prefix=$1
     local marker
@@ -221,8 +272,83 @@ verify_sha1() {
     expected=$(awk '{print $1}' "$sha1_filename")
     actual=$(sha1sum "$filename" | awk '{print $1}')
 
-    [[ -n "$expected" ]] || die "SHA1 file is empty: $sha1_filename"
-    [[ "$expected" == "$actual" ]] || die "Hash verification failed for $filename"
+    if [[ -z "$expected" ]]; then
+        log_error "SHA1 file is empty: $sha1_filename"
+        return 1
+    fi
+    if [[ "$expected" != "$actual" ]]; then
+        log_error "Hash verification failed for $filename"
+        return 1
+    fi
+}
+
+ensure_not_running() {
+    local product_name=$1
+    local home_dir=$2
+
+    command_exists pgrep || return 0
+    if pgrep -f -- "$home_dir" >/dev/null 2>&1; then
+        log_error "$product_name appears to be in use: running processes reference $home_dir. Stop the SAP Cloud Connector before updating."
+        return 1
+    fi
+}
+
+preserve_scc_config_backup() {
+    local backup_dir=$1
+    local rescue_dir="${SCC_HOME}.config-backup"
+
+    as_root rm -rf "$rescue_dir"
+    as_root cp -a "$backup_dir" "$rescue_dir"
+    echo "SAP Cloud Connector configuration backup preserved at $rescue_dir."
+}
+
+backup_rpm_scc_config() {
+    local backup_dir="${SCC_RPM_HOME}.config-backup"
+    local dir
+    local copied=false
+
+    for dir in config scc_config; do
+        if [[ -d "$SCC_RPM_HOME/$dir" ]]; then
+            if ! $copied; then
+                as_root rm -rf "$backup_dir"
+                as_root mkdir -p "$backup_dir"
+                copied=true
+            fi
+            as_root cp -a "$SCC_RPM_HOME/$dir" "$backup_dir/$dir"
+        fi
+    done
+    if $copied; then
+        echo "SAP Cloud Connector configuration backed up to $backup_dir (previous backup replaced)."
+    fi
+}
+
+systemd_available() {
+    [[ -d /run/systemd/system ]] && command_exists systemctl
+}
+
+scc_service_exists() {
+    systemd_available && [[ -f /etc/systemd/system/scc_daemon.service ]]
+}
+
+stop_scc_service_if_running() {
+    scc_service_exists || return 0
+    if systemctl is-active --quiet scc_daemon.service; then
+        echo "Stopping scc_daemon service..."
+        as_root systemctl stop scc_daemon.service
+        SCC_SERVICE_STOPPED=true
+    fi
+}
+
+start_scc_service_if_stopped() {
+    $SCC_SERVICE_STOPPED || return 0
+    SCC_SERVICE_STOPPED=false
+    echo "Starting scc_daemon service..."
+    as_root systemctl start scc_daemon.service || log_error "Failed to start scc_daemon service."
+}
+
+restore_scc_ownership() {
+    getent passwd sccadmin >/dev/null 2>&1 || return 0
+    as_root chown -R sccadmin:sccgroup "$SCC_HOME"
 }
 
 update_rpm() {
@@ -244,9 +370,18 @@ replace_sapjvm_archive() {
     local version=$2
     local extract_dir="$WORK_DIR/sapjvm"
 
+    stop_scc_service_if_running
+    ensure_not_running "SAP JVM" "$SAPJVM_HOME" || return 1
+
     mkdir -p "$extract_dir"
-    unzip -q "$artifact" -d "$extract_dir" || die "Failed to extract $artifact"
-    [[ -d "$extract_dir/sapjvm_8" ]] || die "Expected sapjvm_8 directory in $artifact."
+    if ! unzip -q "$artifact" -d "$extract_dir"; then
+        log_error "Failed to extract $artifact"
+        return 1
+    fi
+    if [[ ! -d "$extract_dir/sapjvm_8" ]]; then
+        log_error "Expected sapjvm_8 directory in $artifact."
+        return 1
+    fi
 
     as_root mkdir -p "$(dirname "$SAPJVM_HOME")"
     as_root rm -rf "$SAPJVM_HOME"
@@ -260,6 +395,9 @@ replace_scc_archive() {
     local version=$2
     local backup_dir="$WORK_DIR/scc-config-backup"
 
+    stop_scc_service_if_running
+    ensure_not_running "SAP Cloud Connector" "$SCC_HOME" || return 1
+
     mkdir -p "$backup_dir"
     if [[ -d "$SCC_HOME/config" ]]; then
         as_root cp -a "$SCC_HOME/config" "$backup_dir/config"
@@ -270,8 +408,16 @@ replace_scc_archive() {
 
     as_root rm -rf "$SCC_HOME"
     as_root mkdir -p "$SCC_HOME"
-    as_root tar -xzf "$artifact" -C "$SCC_HOME" || die "Failed to extract $artifact"
-    [[ -f "$SCC_HOME/go.sh" ]] || die "Expected go.sh in extracted SAP Cloud Connector archive."
+    if ! as_root tar -xzf "$artifact" -C "$SCC_HOME"; then
+        preserve_scc_config_backup "$backup_dir"
+        log_error "Failed to extract $artifact into $SCC_HOME."
+        return 1
+    fi
+    if [[ ! -f "$SCC_HOME/go.sh" ]]; then
+        preserve_scc_config_backup "$backup_dir"
+        log_error "Expected go.sh in extracted SAP Cloud Connector archive."
+        return 1
+    fi
 
     if [[ -d "$backup_dir/config" ]]; then
         as_root rm -rf "$SCC_HOME/config"
@@ -283,6 +429,7 @@ replace_scc_archive() {
     fi
 
     write_version_marker "$SCC_HOME" "$version"
+    restore_scc_ownership
     echo "SAP Cloud Connector archive updated at $SCC_HOME."
 }
 
@@ -291,22 +438,51 @@ download_and_update() {
     local product_prefix=$2
     local version=$3
     local file_type=$4
-    local artifact="${product_prefix}-${version}-linux-x64.${file_type}"
-    local download_url="${DOWNLOAD_BASE_URL}/${artifact}"
-    local sha1_url="${download_url}.sha1"
     local previous_dir=$PWD
-    local rpm_package
-    local -a rpm_packages
+    local status=0
 
-    [[ -n "$version" ]] || die "Could not determine latest $product_name version."
+    if [[ -z "$version" ]]; then
+        log_error "Could not determine latest $product_name version."
+        return 1
+    fi
 
     WORK_DIR=$(mktemp -d)
     cd "$WORK_DIR"
 
+    fetch_and_apply_update "$product_name" "$product_prefix" "$version" "$file_type" || status=1
+
+    cd "$previous_dir"
+    cleanup
+    WORK_DIR=""
+    start_scc_service_if_stopped
+
+    if [[ "$status" -eq 0 ]]; then
+        echo "$product_name update completed."
+    fi
+    return "$status"
+}
+
+fetch_and_apply_update() {
+    local product_name=$1
+    local product_prefix=$2
+    local version=$3
+    local file_type=$4
+    local artifact="${product_prefix}-${version}-linux-x64.${file_type}"
+    local download_url="${DOWNLOAD_BASE_URL}/${artifact}"
+    local sha1_url="${download_url}.sha1"
+    local rpm_package
+    local -a rpm_packages
+
     echo "Downloading $product_name $version..."
-    download_file "$download_url" "$artifact" || die "Failed to download $download_url"
-    download_file "$sha1_url" "${artifact}.sha1" || die "Failed to download $sha1_url"
-    verify_sha1 "$artifact" "${artifact}.sha1"
+    if ! download_file "$download_url" "$artifact"; then
+        log_error "Failed to download $download_url"
+        return 1
+    fi
+    if ! download_file "$sha1_url" "${artifact}.sha1"; then
+        log_error "Failed to download $sha1_url"
+        return 1
+    fi
+    verify_sha1 "$artifact" "${artifact}.sha1" || return 1
 
     if [[ "$INSTALL_MODE" == "archive" && "$product_prefix" == "sapjvm" ]]; then
         replace_sapjvm_archive "$artifact" "$version"
@@ -314,22 +490,30 @@ download_and_update() {
         replace_scc_archive "$artifact" "$version"
     else
         if [[ "$file_type" == "zip" ]]; then
-            unzip -q "$artifact" || die "Failed to extract $artifact"
+            if ! unzip -q "$artifact"; then
+                log_error "Failed to extract $artifact"
+                return 1
+            fi
             mapfile -t rpm_packages < <(find . -maxdepth 1 -type f -name '*.rpm' -print)
-            [[ "${#rpm_packages[@]}" -eq 1 ]] || die "Expected one RPM in $artifact, found ${#rpm_packages[@]}."
+            if [[ "${#rpm_packages[@]}" -ne 1 ]]; then
+                log_error "Expected one RPM in $artifact, found ${#rpm_packages[@]}."
+                return 1
+            fi
             rpm_package=${rpm_packages[0]}
         else
             rpm_package=$artifact
         fi
 
-        echo "Updating $product_name..."
-        update_rpm "$rpm_package" || return 1
-    fi
+        if [[ "$product_prefix" == "sapcc" ]]; then
+            backup_rpm_scc_config
+        fi
 
-    cd "$previous_dir"
-    cleanup
-    WORK_DIR=""
-    echo "$product_name update completed."
+        echo "Updating $product_name..."
+        if ! update_rpm "$rpm_package"; then
+            log_error "Failed to update $product_name via rpm."
+            return 1
+        fi
+    fi
 }
 
 update_common() {
@@ -374,15 +558,17 @@ update_common() {
 }
 
 send_update_email() {
-    if [[ -n "$EMAIL" ]]; then
-        command_exists sendmail || die "sendmail is required when an email recipient is provided."
-        {
-            echo "To: $EMAIL"
-            echo "Subject: SAP Cloud Connector Helper Update Summary"
-            echo
-            printf 'Update Summary:%s\n' "$UPDATE_RESULTS"
-        } | sendmail -t
+    [[ -n "$EMAIL" ]] || return 0
+    if ! command_exists sendmail; then
+        log_error "sendmail not found; skipping the update summary email."
+        return 0
     fi
+    {
+        echo "To: $EMAIL"
+        echo "Subject: SAP Cloud Connector Helper Update Summary"
+        echo
+        printf 'Update Summary:%s\n' "$UPDATE_RESULTS"
+    } | sendmail -t || log_error "Failed to send the update summary email to $EMAIL."
 }
 
 main() {
@@ -391,8 +577,12 @@ main() {
     local jvm_version
     local scc_file_type
     local jvm_file_type
+    local overall_status=0
 
     parse_args "$@"
+    if [[ -n "$EMAIL" ]]; then
+        command_exists sendmail || die "sendmail is required when an email recipient is provided."
+    fi
     require_supported_platform
     install_required_packages
 
@@ -411,13 +601,16 @@ main() {
         scc_file_type=zip
     fi
 
-    jvm_version=$(latest_version "$tools_page" "sapjvm" "$jvm_file_type")
-    scc_version=$(latest_version "$tools_page" "sapcc" "$scc_file_type")
+    jvm_version=$(resolve_version "$tools_page" "sapjvm" "$jvm_file_type" "$JVM_VERSION_OVERRIDE")
+    scc_version=$(resolve_version "$tools_page" "sapcc" "$scc_file_type" "$SCC_VERSION_OVERRIDE")
 
-    update_common "SAP JVM" "sapjvm" '^sapjvm$' "$jvm_version" "$jvm_file_type"
-    update_common "SAP Cloud Connector" "sapcc" '^com[.]sap[.]scc[.-]ui$' "$scc_version" "$scc_file_type"
+    update_common "SAP JVM" "sapjvm" '^sapjvm$' "$jvm_version" "$jvm_file_type" || overall_status=1
+    update_common "SAP Cloud Connector" "sapcc" '^com[.]sap[.]scc[.-]ui$' "$scc_version" "$scc_file_type" || overall_status=1
 
-    send_update_email
+    printf 'Update Summary:%s\n' "$UPDATE_RESULTS"
+    if [[ "$overall_status" -ne 0 ]]; then
+        die "One or more updates failed."
+    fi
     echo "All updates completed."
 }
 
