@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 TOOLS_URL="https://tools.hana.ondemand.com/#cloud"
 DOWNLOAD_BASE_URL="https://tools.hana.ondemand.com/additional"
-USER_AGENT="cloud-connector-helper/1.3"
+USER_AGENT="cloud-connector-helper/1.4"
 UNATTENDED=false
 EMAIL=""
 QUIET=false
